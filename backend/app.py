@@ -438,6 +438,10 @@ def about():
             "note": "Rule-based checks run locally. When an AI key is configured, three specialist agents add judgement-based findings; confidential terms, emails and phone numbers are masked before any external call."}
 
 
+@app.get("/api/ai-test")
+def ai_test(u=Depends(need("admin"))): return llm.diagnose()
+
+
 @app.get("/api/health")
 def health(): return {"ok": True}
 

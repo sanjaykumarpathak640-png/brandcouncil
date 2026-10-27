@@ -135,7 +135,7 @@ async function reviewView(id) {
   <h1>${esc(r.title)}</h1><p class="sub">${esc(r.channel)} · by ${esc(r.author)} · version ${r.version}${r.demo ? " · <b>synthetic demo data</b>" : ""}</p>
   <div class="grid g4" style="margin-bottom:14px"><div class="card kpi"><div class="score">${r.score}<small>/100</small></div><div class="muted">Brand-safety score</div></div>
     <div class="card kpi"><b style="color:var(--high)">${r.counts.high}</b><span class="muted">High</span></div><div class="card kpi"><b style="color:var(--med)">${r.counts.medium}</b><span class="muted">Medium</span></div><div class="card kpi"><b>${r.counts.low}</b><span class="muted">Low</span></div></div>
-  ${r.ai_status && r.ai_status !== "off" ? `<div class="notice">AI-assisted review: ${esc(r.ai_status)}. Confidential terms were masked before the AI call.</div>` : `<div class="notice">Rule-based council checks only (no AI key configured in this deployment). Every flag below is still explained and cited.</div>`}
+  ${r.ai_status && r.ai_status !== "off" ? `<div class="notice ${r.ai_status.startsWith("ok") ? "" : "warn"}">${r.ai_status.startsWith("ok") ? "AI-assisted review: ok. Confidential terms were masked before the AI call." : "AI agents could not be used for this review (" + esc(r.ai_status) + "). The rule-based council results below are complete and still explained."}</div>` : `<div class="notice">Rule-based council checks only (no AI key configured in this deployment). Every flag below is still explained and cited.</div>`}
   <div class="grid g2" style="align-items:start"><div>
     <div class="card"><h2>Content</h2>
       ${r.kind === "image" ? `<img alt="${esc(r.alt_text || "Uploaded image")}" src="/api/reviews/${r.id}/image?token=${encodeURIComponent(token)}" style="max-width:100%;border-radius:8px;margin-bottom:8px">` : ""}
@@ -234,7 +234,9 @@ async function aboutView() {
     <tr><td><b>Accessibility / Visual</b></td><td>Alt-text, contrast, readability, brand palette</td></tr><tr><td><b>Coordinator</b></td><td>Merges findings, removes duplicates, discards anything without a guideline citation, ranks by severity</td></tr></tbody></table></div>
   <div class="card"><h2>AI and external services</h2><p>AI mode in this deployment: <b>${a.ai_enabled ? "ON (" + esc(a.ai_provider) + ", model " + esc(a.ai_model) + ")" : "OFF (rule-based checks only)"}</b></p>
     <p>${esc(a.note)}</p><ul><li>AI output is validated: it must quote the content exactly and cite a real guideline, otherwise it is discarded.</li><li>Findings are labelled "AI-assisted" or "rule check".</li><li>AI only suggests. Humans accept, edit, approve or reject.</li><li>Libraries: ${a.libraries.map(esc).join(", ")}.</li></ul></div></div>
+  ${me.role === "admin" ? `<div class="card"><h2>Test AI connection</h2><p class="muted">Admins can check whether the AI service accepts the configured key.</p><button id="aitest" class="sec">Test AI connection</button><p id="aires" class="muted"></p></div>` : ""}
   <div class="card"><h2>Human control and privacy</h2><ul><li>No content is rewritten or published automatically.</li><li>Roles: creators check and submit, managers approve, admins manage rules.</li><li>Every decision, comment and revision is stored in the history.</li><li>Confidential terms, emails and phone numbers are masked before any external AI call.</li><li>All data in this demo is synthetic.</li></ul></div>`;
+  const bt = $("#aitest"); if (bt) bt.onclick = wrap(async () => { $("#aires").textContent = "Testing..."; const r = await api("/ai-test"); $("#aires").innerHTML = (r.ok ? "<b style='color:#067647'>Working.</b> " : "<b style='color:#b42318'>Not working.</b> ") + esc(r.detail) + (r.model ? " Model: " + esc(r.model) : ""); });
 }
 
 start();

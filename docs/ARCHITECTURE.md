@@ -28,7 +28,7 @@ FastAPI service (backend/app.py)  -- serves the API and the static frontend
 - **Insights from human decisions.** A guideline whose flags are mostly dismissed (at least 3 decisions, 50% or more dismissed) is marked "possibly unclear" with suggested wording.
 
 ## APIs, models, libraries and services used
-- AI models (optional, only when a key is configured): Google Gemini (`gemini-2.5-flash` by default) or Anthropic Claude via their HTTPS APIs
+- AI models (optional, only when a key is configured): Google Gemini (`gemini-flash-latest` by default, with fallbacks) or Anthropic Claude via their HTTPS APIs
 - Python libraries: FastAPI, Uvicorn, python-multipart, Pillow, Python standard library (sqlite3, re, hashlib, urllib)
 - Frontend: plain HTML, CSS and JavaScript (no framework, no external CDN)
 - Hosting: Render (web service)

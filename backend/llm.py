@@ -8,7 +8,9 @@ Safety design:
 import os, re, json, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_FALLBACKS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-lite-latest"]
+_working_model = None
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-5-5")
 
 AGENTS = {
@@ -49,20 +51,57 @@ def _post(url, headers, body, timeout=25):
         return json.loads(r.read().decode())
 
 
+def http_detail(e):
+    """Short, key-free description of an HTTPError."""
+    try:
+        msg = json.loads(e.read().decode()).get("error", {}).get("message", "")
+    except Exception:
+        msg = ""
+    key = os.environ.get("GEMINI_API_KEY", "")
+    msg = msg.replace(key, "***") if key else msg
+    return f"HTTP {e.code}: {msg[:160]}".strip()
+
+
 def call_model(system, user):
+    global _working_model
     p = provider()
     if p == "gemini":
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={os.environ['GEMINI_API_KEY']}"
-        d = _post(url, {}, {"systemInstruction": {"parts": [{"text": system}]},
-                            "contents": [{"role": "user", "parts": [{"text": user}]}],
-                            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}})
-        return d["candidates"][0]["content"]["parts"][0]["text"]
+        body = {"systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": user}]}],
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}}
+        models = ([_working_model] if _working_model else []) + [GEMINI_MODEL] + [m for m in GEMINI_FALLBACKS if m != GEMINI_MODEL]
+        last = None
+        for m in dict.fromkeys(models):
+            try:
+                d = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
+                          {"x-goog-api-key": os.environ["GEMINI_API_KEY"]}, body)
+                _working_model = m
+                return d["candidates"][0]["content"]["parts"][0]["text"]
+            except urllib.error.HTTPError as e:
+                last = e
+                if e.code not in (400, 404): raise      # key / quota problems: another model will not help
+        raise last
     if p == "anthropic":
         d = _post("https://api.anthropic.com/v1/messages",
                   {"x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01"},
                   {"model": ANTHROPIC_MODEL, "max_tokens": 1500, "system": system, "messages": [{"role": "user", "content": user}]})
         return d["content"][0]["text"]
     raise RuntimeError("no provider")
+
+
+def diagnose():
+    """Used by the admin 'Test AI connection' button. Never returns the key."""
+    p = provider()
+    if not p: return {"ok": False, "provider": None, "detail": "No API key is set (GEMINI_API_KEY). The rule-based council is running alone."}
+    try:
+        out = call_model("Reply with the JSON array [] and nothing else.", "ping")
+        return {"ok": True, "provider": p, "model": _working_model or GEMINI_MODEL, "detail": "The AI service answered correctly."}
+    except urllib.error.HTTPError as e:
+        hint = {400: "The model name or request was rejected.", 401: "The API key was rejected.", 403: "The key is not allowed to use this API (create a key in Google AI Studio and enable it for the Gemini API).",
+                404: "No usable model was found.", 429: "Quota or rate limit reached. Wait a minute and retry."}.get(e.code, "")
+        return {"ok": False, "provider": p, "detail": f"{http_detail(e)} {hint}".strip()}
+    except Exception as e:
+        return {"ok": False, "provider": p, "detail": f"{type(e).__name__}: {str(e)[:160]}"}
 
 
 def _parse(raw):
@@ -113,7 +152,10 @@ def ai_findings(text, guidelines, facts, conf_terms):
                                     "reason": str(item.get("reason", ""))[:300], "suggestion": sugg[:300] if sugg else None,
                                     "replacement": sugg[:300] if sugg else None,
                                     "confidence": float(item.get("confidence", 0.7) or 0.7), "source": "ai"})
-            except Exception as e:  # network, quota, malformed JSON...
+            except urllib.error.HTTPError as e:
+                errors.append(f"{name}: {http_detail(e)}")
+            except Exception as e:  # network, malformed JSON...
                 errors.append(f"{name}: {type(e).__name__}")
-    status = "ok" if not errors else ("partial: " + ", ".join(errors) if results else "error: " + ", ".join(errors))
+    uniq = sorted({err.split(": ", 1)[1] for err in errors})
+    status = "ok" if not errors else (("partial: " if results else "error: ") + "; ".join(uniq))
     return results, status
