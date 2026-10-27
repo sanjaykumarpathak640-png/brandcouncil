@@ -5,11 +5,11 @@ Safety design:
  * the model must return strict JSON; anything malformed, uncited or not found in the text is discarded;
  * if no API key is set or the call fails, BrandCouncil still works with the rule engine alone.
 """
-import os, re, json, urllib.request, urllib.error
+import os, re, json, time, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
-GEMINI_FALLBACKS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-lite-latest"]
+GEMINI_FALLBACKS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
 _working_model = None
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-5-5")
 
@@ -69,17 +69,23 @@ def call_model(system, user):
         body = {"systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": user}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}}
-        models = ([_working_model] if _working_model else []) + [GEMINI_MODEL] + [m for m in GEMINI_FALLBACKS if m != GEMINI_MODEL]
+        models = list(dict.fromkeys(([_working_model] if _working_model else []) + [GEMINI_MODEL] + GEMINI_FALLBACKS))[:4]
         last = None
-        for m in dict.fromkeys(models):
-            try:
-                d = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
-                          {"x-goog-api-key": os.environ["GEMINI_API_KEY"]}, body)
-                _working_model = m
-                return d["candidates"][0]["content"]["parts"][0]["text"]
-            except urllib.error.HTTPError as e:
-                last = e
-                if e.code not in (400, 404): raise      # key / quota problems: another model will not help
+        for m in models:
+            for attempt in (1, 2):
+                try:
+                    d = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
+                              {"x-goog-api-key": os.environ["GEMINI_API_KEY"]}, body, timeout=15)
+                    _working_model = m
+                    return d["candidates"][0]["content"]["parts"][0]["text"]
+                except urllib.error.HTTPError as e:
+                    last = e
+                    if e.code in (401, 403): raise                 # the key itself is the problem: other models will not help
+                    if e.code in (429, 500, 502, 503, 504) and attempt == 1:
+                        time.sleep(1.2); continue                  # busy: one quick retry, then try the next model
+                    break                                          # 400/404 or still busy: next model
+                except (urllib.error.URLError, TimeoutError) as e:
+                    last = e; break
         raise last
     if p == "anthropic":
         d = _post("https://api.anthropic.com/v1/messages",
