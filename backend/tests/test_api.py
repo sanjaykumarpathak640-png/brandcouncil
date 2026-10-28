@@ -119,3 +119,12 @@ def test_ai_findings_are_validated(monkeypatch):
     monkeypatch.setattr(llm, "call_model", lambda s, u: (_ for _ in ()).throw(RuntimeError("boom")))
     f, status = llm.ai_findings("Try our fantastic beans today", gl, facts, [])
     assert f == [] and status.startswith("error")
+
+
+def test_contradicted_sentence_is_not_listed_as_verified():
+    h = login("creator")
+    r = client.post("/api/reviews", headers=h, json={"text": "Free delivery in 1 day."}).json()
+    assert any(f["fact_id"] == "F1" for f in r["findings"])
+    assert r["verified"] == []
+    r2 = client.post("/api/reviews", headers=h, json={"text": "Free delivery in 2 days."}).json()
+    assert r2["findings"] == [] and len(r2["verified"]) >= 1

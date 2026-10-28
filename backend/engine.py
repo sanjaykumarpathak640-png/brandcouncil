@@ -158,20 +158,24 @@ def run_rules(text, G, facts, today=None):
                 b.add(gabs, m.start(), m.end(), f"'{m.group().strip()}' is an absolute promise that no approved fact supports.",
                       "Remove the absolute wording.", "" if m.group().strip().startswith("100") else None, "medium"); flagged_sent.add(s0)
         if gfacts:
-            matched = False
+            matched = False; sent_ok = []; sent_bad = False
             for f in hits:
                 matched = True
                 if f["expires"] and f["expires"] < today:
                     b.add(gfacts, offset, s1, f"This refers to '{f['topic']}', but that approved fact expired on {f['expires']}.",
-                          "Remove the outdated offer or ask an admin to renew the fact.", None, "high", fact=f); flagged_sent.add(s0); continue
+                          "Remove the outdated offer or ask an admin to renew the fact.", None, "high", fact=f); flagged_sent.add(s0); sent_bad = True; continue
                 bad = [q for q in quantities(s) if f["unit"] and q[1] == f["unit"] and abs(q[0] - float(f["value"])) > 1e-9] if f["value"] is not None else []
                 if bad:
                     v, u, a, z = bad[0]
                     b.add(gfacts, offset + a, offset + z,
                           f"Contradicts approved fact {f['id']}: \"{f['statement']}\"",
-                          f"Use the approved value: {fmt_quantity(f['value'], f['unit'])}.", fmt_quantity(f["value"], f["unit"]), "high", fact=f, category="claim"); flagged_sent.add(s0)
+                          f"Use the approved value: {fmt_quantity(f['value'], f['unit'])}.", fmt_quantity(f["value"], f["unit"]), "high", fact=f, category="claim"); flagged_sent.add(s0); sent_bad = True
                 else:
-                    verified.append({"text": s, "fact_id": f["id"], "fact_statement": f["statement"], "source": f["source"]})
+                    sent_ok.append({"text": s, "fact_id": f["id"], "fact_statement": f["statement"], "source": f["source"],
+                                    "_k": max(len(k) for k in f["keywords"] if k in low)})
+            if sent_ok and not sent_bad and s0 not in flagged_sent:   # a sentence with any fact problem is never shown as verified
+                best = max(sent_ok, key=lambda v: v["_k"])      # show the most specific supporting fact only
+                verified.append({k: v for k, v in best.items() if k != "_k"})
             if not matched and s0 not in flagged_sent and MARKER_RE.search(s) and not re.search(r"\bsince\b.*\bcoffee lovers\b", s, re.I):
                 b.add(gfacts, offset, s1, "This factual or promotional claim has no matching approved fact in the Facts Vault.",
                       "Add an approved fact with a source, or remove the claim.", None, "medium", confidence=0.75, category="claim")
