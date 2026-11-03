@@ -15,6 +15,13 @@ Open the live link, then press one of the demo buttons on the sign-in page (no p
 Demo password for all accounts: `demo123`. All data is synthetic (fictional brand "FreshBrew").
 Quick test: sign in as creator, choose **"Instagram post - the intern draft"** from the sample list and press *Check with the council*.
 
+## New in Round 3 (the three promised improvements, plus hardening)
+1. **Brand-book import** (Admin > *Import brand book*): upload a PDF / Word / text brand book or paste it. BrandCouncil proposes guidelines, preferred terms, pressure phrases and approved facts. Every proposal shows the exact sentence it came from; AI proposals whose source sentence is not really in the document are discarded. **Nothing is active until an admin approves (or edits) it.** Works without an AI key through a local extractor.
+2. **Images and documents**: image posts have the text written *inside* the picture read by a vision model (or typed by the creator) and checked like any text; `.docx`, `.pdf` and `.txt` documents are reviewed with every flag tied to its paragraph number.
+3. **Measured accuracy + better wording**: *Accuracy* page runs the council on 34 labelled posts and reports precision / recall per agent and per guideline, including its own mistakes; re-run it after any rule change. In *Insights*, for guidelines reviewers keep dismissing, an AI-drafted clearer wording and a **what-if impact preview** (re-runs all stored reviews with the changed rule) are shown before an admin adopts anything.
+
+Also: friendly errors for bad files and bad input, double-click protection, empty states, first-use guidance, score explanation, 29 automated tests.
+
 ## What works (Round 2)
 - Guidelines, terminology, approved facts (with source and expiry) and confidential terms managed in the UI
 - Text review by Tone, Terminology, Claims and Accessibility agents; every flag shows the flagged text, reason, the quoted guideline, the approved fact and source, a suggested fix and confidence
@@ -27,10 +34,11 @@ Quick test: sign in as creator, choose **"Instagram post - the intern draft"** f
 
 ## Run locally
 ```bash
-pip install -r backend/requirements.txt
+python -m venv .venv && source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r backend/requirements-dev.txt
 cd backend
 uvicorn app:app --reload          # open http://localhost:8000
-python -m pytest tests            # 12 automated tests
+python -m pytest tests            # 29 automated tests
 ```
 Set `GEMINI_API_KEY` (free key from Google AI Studio) to switch the AI agents on. Without it the rule-based council runs alone.
 
@@ -41,7 +49,8 @@ Set `GEMINI_API_KEY` (free key from Google AI Studio) to switch the AI agents on
 
 ## Documentation
 - `docs/ARCHITECTURE.md` - architecture, technical decisions, APIs/models/libraries used
-- Round 2 PDF - completed features, changes from the Round 1 plan, three Round 3 improvements
+- `docs/ROADMAP.md` - what comes next
+- Round 3 PDF - final product summary
 
 ## Known limitations
-Single organisation per deployment; SQLite storage (resets on free hosting restarts, demo data is re-created automatically); image checks are heuristic (no OCR yet); AI mode needs an API key.
+Single organisation per deployment; SQLite storage (resets on free hosting restarts, demo data is re-created automatically); image colour/contrast checks are heuristic; reading text inside images and AI proposals need an AI key (without one, creators type the image text and the local extractor handles brand books); scanned PDFs are not OCR'd; the benchmark covers the rule engine only (34 posts) and is a regression check, not a guarantee on real-world content.

@@ -46,7 +46,8 @@ function loginView() {
 function nav() {
   const items = [["new", "New review"], ["queue", me.role === "creator" ? "My reviews" : "Review queue"]];
   if (me.role !== "creator") items.push(["insights", "Insights"]);
-  if (me.role === "admin") items.push(["brand", "Brand rules"]);
+  if (me.role !== "creator") items.push(["accuracy", "Accuracy"]);
+  if (me.role === "admin") { items.push(["import", "Import brand book"]); items.push(["brand", "Brand rules"]); }
   items.push(["about", "About & AI use"]);
   $("#nav").innerHTML = items.map(([k, l]) => `<button data-k="${k}">${l}</button>`).join("");
   $("#nav").querySelectorAll("button").forEach(b => b.onclick = () => location.hash = "#/" + b.dataset.k);
@@ -55,37 +56,47 @@ window.addEventListener("hashchange", () => me && route());
 function route() {
   const [, page, arg] = (location.hash || "#/new").split("/");
   $("#nav").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.k === page));
-  const views = { new: newView, queue: queueView, review: () => reviewView(arg), insights: insightsView, brand: brandView, about: aboutView };
+  const views = { new: newView, queue: queueView, review: () => reviewView(arg), insights: insightsView, accuracy: accuracyView, import: importView, brand: brandView, about: aboutView };
   (views[page] || newView)().catch(e => toast(e.message));
 }
 
 // ---------------------------------------------------------------- new review
 async function newView() {
   const samples = await api("/samples");
-  main.innerHTML = `<h1>Check content before it goes out</h1><p class="sub">Paste a post or upload an image. The council checks it against your brand guidelines and approved facts and explains every flag.</p>
-  <div class="grid g2"><div class="card"><h2>Text post</h2>
+  main.innerHTML = `<h1>Check content before it goes out</h1>
+  <p class="sub">Three steps: <b>1.</b> add your content below &middot; <b>2.</b> read the flags (each one explains why and quotes the rule) &middot; <b>3.</b> accept or dismiss, then submit for approval. Nothing is changed unless you choose it.</p>
+  <div class="grid g3"><div class="card"><h2>Text post</h2>
     <label for="t1">Title</label><input id="t1" value="Instagram post">
     <label for="ch">Channel</label><select id="ch"><option>Instagram</option><option>Facebook</option><option>LinkedIn</option><option>Twitter</option><option>Website</option><option>Newsletter</option></select>
     <label for="tx">Content</label><textarea id="tx" placeholder="Paste your draft here..."></textarea>
-    <div class="row"><select id="sm" style="width:auto;max-width:60%"><option value="">Load a sample post...</option>${samples.map((s, i) => `<option value="${i}">${esc(s.title)}</option>`).join("")}</select><span class="sp"></span><button id="runT">Check with the council</button></div></div>
+    <div class="row"><select id="sm" aria-label="Sample posts" style="width:auto;max-width:60%"><option value="">Try a sample post...</option>${samples.map((s, i) => `<option value="${i}">${esc(s.title)}</option>`).join("")}</select><span class="sp"></span><button id="runT">Check this text</button></div></div>
+  <div class="card"><h2>Document</h2><p class="muted">Upload a Word (.docx), PDF or text file. Every flag shows the paragraph it came from.</p>
+    <label for="dt">Title (optional)</label><input id="dt" placeholder="e.g. Newsletter draft">
+    <label for="df">File (.docx, .pdf, .txt, max 4 MB)</label><input id="df" type="file" accept=".docx,.pdf,.txt,.md">
+    <div class="row" style="margin-top:12px"><span class="sp"></span><button id="runD">Check this document</button></div>
+    <p class="muted">Scanned PDFs (pictures of pages) cannot be read. Paste their text instead.</p></div>
   <div class="card"><h2>Image post</h2>
     <label for="t2">Title</label><input id="t2" value="Image post">
     <label for="im">Image (PNG or JPG, max 5 MB)</label><input id="im" type="file" accept="image/*">
     <label for="alt">Alt-text (description for screen readers)</label><input id="alt" placeholder="e.g. Latte on a wooden table">
-    <label for="cap">Caption (optional, checked as text)</label><textarea id="cap" style="min-height:70px"></textarea>
-    <div class="row"><span class="sp"></span><button id="runI">Check image</button></div>
-    <p class="muted">Image checks: alt-text, brand colour palette and overall contrast (heuristic).</p></div></div>`;
+    <label for="tii">Text shown inside the image (optional)</label><input id="tii" placeholder="Leave empty to let the AI read it">
+    <label for="cap">Caption (optional)</label><textarea id="cap" style="min-height:60px"></textarea>
+    <div class="row" style="margin-top:12px"><span class="sp"></span><button id="runI">Check this image</button></div>
+    <p class="muted">Checks alt-text, brand colours, contrast, and the words written on the image (read by AI when available).</p></div></div>`;
   $("#sm").onchange = e => { const s = samples[e.target.value]; if (s) { $("#tx").value = s.text; $("#t1").value = s.title; $("#ch").value = s.channel; } };
-  $("#runT").onclick = wrap(async () => {
-    const b = $("#runT"); b.disabled = true; b.textContent = "Council is reviewing...";
-    try { const r = await api("/reviews", { json: { title: $("#t1").value, channel: $("#ch").value, text: $("#tx").value } }); location.hash = "#/review/" + r.id; }
-    finally { b.disabled = false; b.textContent = "Check with the council"; }
-  });
-  $("#runI").onclick = wrap(async () => {
+  const busy = (id, label, fn) => $(id).onclick = wrap(async () => { const b = $(id), old = b.textContent; if (b.disabled) return; b.disabled = true; b.textContent = label;
+    try { await fn(); } finally { b.disabled = false; b.textContent = old; } });
+  busy("#runT", "Council is reviewing...", async () => {
+    if (!$("#tx").value.trim()) return toast("Please paste some content first, or try a sample post");
+    const r = await api("/reviews", { json: { title: $("#t1").value, channel: $("#ch").value, text: $("#tx").value } }); location.hash = "#/review/" + r.id; });
+  busy("#runD", "Reading document...", async () => {
+    const f = $("#df").files[0]; if (!f) return toast("Please choose a file first");
+    const fd = new FormData(); fd.append("file", f); fd.append("title", $("#dt").value);
+    const r = await api("/reviews/document", { body: fd }); location.hash = "#/review/" + r.id; });
+  busy("#runI", "Checking image...", async () => {
     const f = $("#im").files[0]; if (!f) return toast("Please choose an image first");
-    const fd = new FormData(); fd.append("file", f); fd.append("title", $("#t2").value); fd.append("alt_text", $("#alt").value); fd.append("caption", $("#cap").value);
-    const r = await api("/reviews/image", { body: fd }); location.hash = "#/review/" + r.id;
-  });
+    const fd = new FormData(); fd.append("file", f); fd.append("title", $("#t2").value); fd.append("alt_text", $("#alt").value); fd.append("caption", $("#cap").value); fd.append("text_in_image", $("#tii").value);
+    const r = await api("/reviews/image", { body: fd }); location.hash = "#/review/" + r.id; });
 }
 
 // ---------------------------------------------------------------- queue
@@ -97,7 +108,7 @@ async function queueView() {
   const draw = () => {
     const f = $("#fs").value, list = rows.filter(r => !f || r.status === f).sort((a, b) => (b.status === "pending") - (a.status === "pending"));
     $("#tb").innerHTML = list.map(r => `<tr class="click" data-id="${r.id}"><td><b>${esc(r.title)}</b><div class="tag">${esc(r.channel)} · ${r.kind}${r.demo ? " · synthetic demo" : ""}</div></td><td>${esc(r.author)}</td>
-      <td><span class="badge s-${r.status}">${STATUS[r.status]}</span></td><td>${r.score}</td><td>${r.counts.high} high · ${r.counts.medium} med · ${r.counts.low} low</td><td class="tag">${esc(r.updated.replace("T", " ").slice(0, 16))}</td></tr>`).join("") || `<tr><td colspan="6">No reviews yet.</td></tr>`;
+      <td><span class="badge s-${r.status}">${STATUS[r.status]}</span></td><td>${r.score}</td><td>${r.counts.high} high · ${r.counts.medium} med · ${r.counts.low} low</td><td class="tag">${esc(r.updated.replace("T", " ").slice(0, 16))}</td></tr>`).join("") || `<tr><td colspan="6">Nothing here yet. Go to <a href="#/new">New review</a> to check your first post.</td></tr>`;
     $("#tb").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => location.hash = "#/review/" + tr.dataset.id);
   };
   $("#fs").onchange = draw; draw();
@@ -118,6 +129,7 @@ function flagCard(f, dec, canDecide, open) {
   return `<div class="flag ${f.severity} ${d || ""}" id="card-${f.id}">
    <div class="row"><span class="badge b-${f.severity}">${f.severity}</span><b>${esc(f.agent)}</b><span class="tag">${esc(f.category)} · ${f.source === "ai" ? "AI-assisted" : "rule check"} · confidence ${Math.round(f.confidence * 100)}%</span>
      <span class="sp"></span>${d ? `<span class="badge ${d === "accepted" ? "s-approved" : "s-draft"}">${d === "accepted" ? "Accepted" : "Dismissed"} by ${esc(dec[f.id].by)}</span>` : ""}</div>
+   ${f.paragraph ? `<div class="tag">Paragraph ${f.paragraph}</div>` : ""}
    ${f.text ? `<div style="margin:6px 0">Flagged: <b>"${esc(f.text.trim())}"</b></div>` : ""}
    <div>${esc(f.reason)}</div>
    <div class="quote"><b>${esc(f.guideline_id)} · ${esc(f.guideline_title)}:</b> ${esc(f.guideline_quote)}</div>
@@ -130,25 +142,31 @@ async function reviewView(id) {
   const r = await api("/reviews/" + id);
   const open = !["approved", "rejected"].includes(r.status), canDecide = true;
   const isMine = r.author === me.name, isMgr = me.role !== "creator";
+  const textual = r.kind !== "image";
+  const srcNote = { typed: "Text inside the image was typed by the creator and checked.", vision: "Text inside the image was read by AI and checked. Please confirm it matches the image.",
+    vision_none: "AI found no readable text inside the image.", unavailable: "The text inside the image could not be read automatically (AI is not available). Type it into 'Text shown inside the image' to have it checked.", skipped: "" }[(r.meta || {}).text_source] || "";
   const acc = Object.values(r.decisions).filter(d => d.decision === "accepted").length;
   main.innerHTML = `<div class="row"><a href="#/queue">&larr; Back</a><span class="sp"></span><span class="badge s-${r.status}">${STATUS[r.status]}</span></div>
   <h1>${esc(r.title)}</h1><p class="sub">${esc(r.channel)} · by ${esc(r.author)} · version ${r.version}${r.demo ? " · <b>synthetic demo data</b>" : ""}</p>
   <div class="grid g4" style="margin-bottom:14px"><div class="card kpi"><div class="score">${r.score}<small>/100</small></div><div class="muted">Brand-safety score</div></div>
     <div class="card kpi"><b style="color:var(--high)">${r.counts.high}</b><span class="muted">High</span></div><div class="card kpi"><b style="color:var(--med)">${r.counts.medium}</b><span class="muted">Medium</span></div><div class="card kpi"><b>${r.counts.low}</b><span class="muted">Low</span></div></div>
   ${r.ai_status && r.ai_status !== "off" ? `<div class="notice ${r.ai_status.startsWith("ok") ? "" : "warn"}">${r.ai_status.startsWith("ok") ? "AI-assisted review: ok. Confidential terms were masked before the AI call." : "AI agents could not be used for this review (" + esc(r.ai_status) + "). The rule-based council results below are complete and still explained."}</div>` : `<div class="notice">Rule-based council checks only (no AI key configured in this deployment). Every flag below is still explained and cited.</div>`}
+  <p class="muted" style="margin-top:-4px">How to read this: the score starts at 100 and drops for every flag (High -15, Medium -8, Low -3). High means a likely legal or factual problem, Medium a clear guideline breach, Low a style issue.</p>
+  ${r.kind === "document" ? `<div class="notice">Document <b>${esc(r.meta.filename || "")}</b> (${esc(r.meta.file_kind)}) &middot; ${r.meta.paragraphs} paragraphs${r.meta.truncated ? " &middot; <b>only the first part was checked (file is very long)</b>" : ""}</div>` : ""}
+  ${srcNote ? `<div class="notice ${(r.meta || {}).text_source === "unavailable" ? "warn" : ""}">${esc(srcNote)}</div>` : ""}
   <div class="grid g2" style="align-items:start"><div>
     <div class="card"><h2>Content</h2>
       ${r.kind === "image" ? `<img alt="${esc(r.alt_text || "Uploaded image")}" src="/api/reviews/${r.id}/image?token=${encodeURIComponent(token)}" style="max-width:100%;border-radius:8px;margin-bottom:8px">` : ""}
-      <div class="preview" id="pv">${highlight(r.content, r.findings, r.decisions) || "<span class='muted'>(no caption)</span>"}</div>
-      ${r.kind === "text" && open ? `<details style="margin-top:10px"><summary>Edit text and re-check</summary><textarea id="edit">${esc(r.content)}</textarea><p class="row"><button id="recheck" class="sec">Re-check edited text</button></p></details>` : ""}
+      <div class="preview" id="pv" style="white-space:pre-wrap">${highlight(r.content, r.findings, r.decisions) || "<span class='muted'>(no caption)</span>"}</div>
+      ${textual && open ? `<details style="margin-top:10px"><summary>Edit text and re-check</summary><textarea id="edit">${esc(r.content)}</textarea><p class="row"><button id="recheck" class="sec">Re-check edited text</button></p></details>` : ""}
       <div class="row" style="margin-top:10px">
-        ${r.kind === "text" && open ? `<button id="apply" ${acc ? "" : "disabled"}>Apply ${acc} accepted fix${acc === 1 ? "" : "es"} and re-check</button>` : ""}
+        ${textual && open ? `<button id="apply" ${acc ? "" : "disabled"}>Apply ${acc} accepted fix${acc === 1 ? "" : "es"} and re-check</button>` : ""}
         ${open && ["draft", "changes_requested"].includes(r.status) ? `<button id="submit" class="good">Submit for approval</button>` : ""}</div>
       <p class="muted">Nothing is changed automatically. Accepted fixes are applied only when you press the button, and you can edit the result.</p></div>
     ${r.verified.length ? `<div class="card"><h2>Verified claims</h2>${r.verified.map(v => `<div style="margin-bottom:6px"><span class="badge s-approved">Supported</span> "${esc(v.text)}"<div class="tag">${esc(v.fact_statement)} (Source: ${esc(v.source)})</div></div>`).join("")}</div>` : ""}
   </div><div>
     <h2>Council findings (${r.findings.length})</h2>
-    ${r.findings.map(f => flagCard(f, r.decisions, canDecide, open)).join("") || `<div class="card">No issues found. This content matches the brand guidelines and approved facts.</div>`}
+    ${r.findings.map(f => flagCard(f, r.decisions, canDecide, open)).join("") || `<div class="card"><b>No issues found.</b> This content matches the brand guidelines and approved facts.</div>`}
   </div></div>
   ${isMgr && r.status === "pending" ? `<div class="card"><h2>Manager decision</h2><label for="vn">Note to the creator (optional)</label><input id="vn"><div class="row" style="margin-top:10px"><button class="good" data-v="approved">Approve</button><button class="sec" data-v="changes_requested">Request changes</button><button class="bad" data-v="rejected">Reject</button></div></div>` : ""}
   <div class="card"><h2>Comments and history</h2><div class="row"><input id="cm" placeholder="Add a comment..." style="flex:1"><button id="addc" class="sec">Comment</button></div>
@@ -158,12 +176,12 @@ async function reviewView(id) {
   main.querySelectorAll("button[data-a]").forEach(b => b.onclick = wrap(async () => { await api(`/reviews/${id}/decisions`, { json: { finding_id: b.dataset.f, decision: b.dataset.a } }); await reviewView(id); }));
   const ap = $("#apply"); if (ap) ap.onclick = wrap(async () => { await api(`/reviews/${id}/revise`, { json: { apply_accepted: true } }); toast("Fixes applied and content re-checked"); await reviewView(id); });
   const rc = $("#recheck"); if (rc) rc.onclick = wrap(async () => { await api(`/reviews/${id}/revise`, { json: { text: $("#edit").value } }); toast("Re-checked"); await reviewView(id); });
-  const sb = $("#submit"); if (sb) sb.onclick = wrap(async () => {
+  const sb = $("#submit"); if (sb) sb.onclick = wrap(async () => { if (sb.disabled) return; sb.disabled = true;
     const un = r.findings.filter(f => f.severity === "high" && !r.decisions[f.id]).length;
     if (un && !confirm(`${un} high-severity flag(s) have no decision yet. Submit anyway?`)) return;
     await api(`/reviews/${id}/submit`, { method: "POST" }); toast("Submitted for approval"); await reviewView(id);
   });
-  main.querySelectorAll("button[data-v]").forEach(b => b.onclick = wrap(async () => { await api(`/reviews/${id}/verdict`, { json: { verdict: b.dataset.v, note: $("#vn").value } }); toast("Decision recorded"); await reviewView(id); }));
+  main.querySelectorAll("button[data-v]").forEach(b => b.onclick = wrap(async () => { main.querySelectorAll("button[data-v]").forEach(x => x.disabled = true); await api(`/reviews/${id}/verdict`, { json: { verdict: b.dataset.v, note: $("#vn").value } }); toast("Decision recorded"); await reviewView(id); }));
   $("#addc").onclick = wrap(async () => { const t = $("#cm").value.trim(); if (!t) return; await api(`/reviews/${id}/comment`, { json: { text: t } }); await reviewView(id); });
 }
 
@@ -179,9 +197,66 @@ async function insightsView() {
     <td>${g.unclear ? `<span class="badge b-high">Possibly unclear (${Math.round(g.dismiss_rate * 100)}% dismissed)</span>` : `<span class="badge s-approved">Clear</span>`}</td></tr>`).join("")}</tbody></table></div>
   ${d.guidelines.filter(g => g.unclear).map(g => `<div class="card"><h2>Unclear guideline: ${esc(g.guideline_id)} ${esc(g.title)}</h2><p class="muted">Reviewers dismiss most flags for this rule, which usually means the rule is ambiguous, not that the AI is wrong.</p>
     <div class="quote"><b>Current:</b> ${esc(g.text)}</div><div class="fixbox"><b>Suggested wording:</b> ${esc(g.suggested_wording)}</div>
-    ${me.role === "admin" ? `<button class="sec" data-g="${esc(g.guideline_id)}" data-t="${esc(g.suggested_wording)}">Adopt suggested wording</button>` : `<p class="muted">Only an admin can change guidelines.</p>`}</div>`).join("")}
+    <div class="row"><button class="sec" data-prev="${esc(g.guideline_id)}">Preview impact and draft better wording</button></div><div id="prev-${esc(g.guideline_id)}"></div></div>`).join("")}
+  <div class="card"><h2>Is the council accurate?</h2><p class="muted">See measured precision and recall on 34 labelled posts.</p><a href="#/accuracy">Open the accuracy page</a></div>
   <div class="card"><h2>Issues by category</h2>${d.by_category.map(([c, n]) => `<span class="badge s-draft" style="margin-right:6px">${esc(c)}: ${n}</span>`).join("")}</div>`;
-  main.querySelectorAll("button[data-g]").forEach(b => b.onclick = wrap(async () => { await api("/insights/apply-wording", { json: { guideline_id: b.dataset.g, text: b.dataset.t } }); toast("Guideline updated"); await insightsView(); }));
+  main.querySelectorAll("button[data-prev]").forEach(b => b.onclick = wrap(async () => { b.disabled = true; b.textContent = "Working..."; const gid = b.dataset.prev;
+    try {
+      const [sg, dr] = await Promise.all([api("/insights/suggestions?guideline_id=" + encodeURIComponent(gid)), api("/insights/draft-wording", { json: { guideline_id: gid } })]);
+      const c = sg.candidate, i = c && c.impact;
+      document.getElementById("prev-" + gid).innerHTML = `<div class="fixbox" style="margin-top:10px"><b>Drafted wording${dr.source === "ai" ? " (AI-assisted)" : " (template, AI not available)"}:</b><textarea id="dw-${esc(gid)}" style="min-height:90px">${esc(dr.draft)}</textarea></div>
+      ${c ? `<div class="quote"><b>Possible rule change:</b> ${esc(c.description)}<br>Impact on the ${i.reviews_affected} stored reviews that have this flag: <b>${i.flags_before} flags &rarr; ${i.flags_after}</b>. Removed flags that humans had dismissed: <b>${i.removed_that_humans_dismissed}</b>; removed flags that humans had accepted: <b style="color:var(--high)">${i.removed_that_humans_accepted}</b>.</div>` : `<p class="muted">No automatic rule change is proposed for this guideline; only the wording can be improved.</p>`}
+      ${me.role === "admin" ? `<div class="row"><button class="good" data-adopt="${esc(gid)}">Adopt wording</button>${c ? `<label class="row" style="margin:0"><input type="checkbox" id="rc-${esc(gid)}" style="width:auto"> also apply the rule change above</label>` : ""}</div>` : `<p class="muted">Only an admin can adopt changes.</p>`}`;
+      const ad = main.querySelector(`button[data-adopt="${gid}"]`);
+      if (ad) ad.onclick = wrap(async () => { ad.disabled = true; const apply = c && document.getElementById("rc-" + gid).checked; await api("/insights/adopt", { json: { guideline_id: gid, text: document.getElementById("dw-" + gid).value, new_data: apply ? c.new_data : null } }); toast("Guideline updated"); await insightsView(); });
+    } finally { b.disabled = false; b.textContent = "Preview impact and draft better wording"; } }));
+}
+
+// ---------------------------------------------------------------- accuracy benchmark
+const pct = v => v === null || v === undefined ? "n/a" : Math.round(v * 100) + "%";
+async function accuracyView() {
+  const h = await api("/benchmark");
+  main.innerHTML = `<h1>Accuracy of the council</h1><p class="sub">We test the rule-based council on ${h.dataset_size} labelled posts where a human decided in advance which guidelines should be flagged.
+   <b>Precision</b> = of the flags raised, how many were right. <b>Recall</b> = of the problems that exist, how many were found. Re-run it after you change any rule.</p>
+  <div class="row"><button id="runB">Run benchmark now</button><span class="muted">AI agents are not part of this test, so the numbers are repeatable.</span></div><div id="bres"></div>
+  <div class="card"><h2>Previous runs</h2>${h.history.length ? `<table><thead><tr><th>When</th><th>By</th><th>Posts fully correct</th><th>Precision</th><th>Recall</th></tr></thead><tbody>${h.history.map(x => `<tr><td>${esc(x.ts.replace("T", " ").slice(0, 16))}</td><td>${esc(x.by)}</td><td>${x.posts_exact}/${x.posts}</td><td>${pct(x.overall.precision)}</td><td>${pct(x.overall.recall)}</td></tr>`).join("")}</tbody></table>` : `<p class="muted">No runs yet. Press "Run benchmark now".</p>`}</div>`;
+  $("#runB").onclick = wrap(async () => { const b = $("#runB"); b.disabled = true; b.textContent = "Running..."; try {
+    const r = await api("/benchmark/run", { method: "POST" }); const o = r.overall;
+    $("#bres").innerHTML = `<div class="grid g4" style="margin:14px 0"><div class="card kpi"><b>${r.posts_exact}/${r.posts}</b>Posts fully correct</div><div class="card kpi"><b>${pct(o.precision)}</b>Precision</div><div class="card kpi"><b>${pct(o.recall)}</b>Recall</div><div class="card kpi"><b>${o.tp}/${o.tp + o.fn}</b>Real problems found</div></div>
+     <div class="card"><h2>By agent</h2><table><thead><tr><th>Agent</th><th>Precision</th><th>Recall</th><th>Found</th><th>Missed</th><th>False alarms</th></tr></thead><tbody>${Object.entries(r.by_agent).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${pct(v.precision)}</td><td>${pct(v.recall)}</td><td>${v.tp}</td><td>${v.fn}</td><td>${v.fp}</td></tr>`).join("")}</tbody></table></div>
+     <div class="card"><h2>By guideline</h2><table><tbody>${Object.entries(r.by_guideline).map(([k, v]) => `<tr><td><b>${esc(k)}</b> ${esc(v.title)}</td><td>precision ${pct(v.precision)}</td><td>recall ${pct(v.recall)}</td></tr>`).join("")}</tbody></table></div>
+     <div class="card"><h2>Where it went wrong (shown honestly)</h2>${r.missed.concat(r.false_alarms).length ? r.missed.map(m => `<p><span class="badge b-high">Missed</span> ${esc(m.guideline_id)}: "${esc(m.text)}"</p>`).join("") + r.false_alarms.map(m => `<p><span class="badge b-medium">False alarm</span> ${esc(m.guideline_id)}: "${esc(m.text)}"</p>`).join("") : "<p>No mistakes on this set.</p>"}</div>`;
+    toast("Benchmark finished"); } finally { b.disabled = false; b.textContent = "Run benchmark now"; } });
+}
+
+// ---------------------------------------------------------------- brand book import (admin)
+async function importView() {
+  const p = await api("/proposals");
+  const field = (k, v, w) => `<input data-k="${k}" value="${esc(v ?? "")}" ${w ? `style="width:${w}"` : ""} aria-label="${k}">`;
+  const row = it => { const d = it.data, K = it.kind;
+    const body = K === "term" ? `Avoid ${field("bad", d.bad)} &rarr; use ${field("good", d.good)}`
+      : K === "hype" ? `Pressure phrase ${field("phrase", d.phrase)} &rarr; suggest ${field("alternative", d.alternative)}`
+      : K === "fact" ? `${field("topic", d.topic)}<label>Approved statement</label>${field("statement", d.statement)}<div class="grid g3"><div><label>Keywords</label>${field("keywords", (d.keywords || []).join(", "))}</div><div><label>Number</label>${field("value", d.value)}</div><div><label>Unit (day, hour, month, year, pct, inr)</label>${field("unit", d.unit)}</div></div><label>Expires (YYYY-MM-DD, optional)</label>${field("expires", d.expires)}`
+      : `${field("title", d.title)}<label>Guideline text</label><textarea data-k="text" style="min-height:60px">${esc(d.text)}</textarea>`;
+    return `<div class="card" data-pid="${it.id}"><div class="row"><span class="badge s-draft">${{ term: "Preferred term", hype: "Pressure phrase", fact: "Approved fact", guideline: "Guideline" }[K]}</span><span class="tag">${it.source === "ai" ? "AI-proposed" : "rule-based extraction"}</span></div>
+      <div style="margin:8px 0">${body}</div><div class="quote"><b>Found in your brand book:</b> "${esc(it.excerpt)}"</div>
+      <div class="row"><button class="mini good pa">Approve</button><button class="mini sec pr">Reject</button></div></div>`; };
+  main.innerHTML = `<h1>Import a brand book</h1><p class="sub">Upload your brand book (PDF, Word or text) or paste it. BrandCouncil proposes guidelines, preferred terms and approved facts, each with the sentence it came from. <b>Nothing becomes active until you approve it.</b></p>
+  <div class="card"><div class="grid g2"><div><label for="bf">Brand book file (.docx, .pdf, .txt)</label><input id="bf" type="file" accept=".docx,.pdf,.txt,.md"></div><div><label for="bt">...or paste text</label><textarea id="bt" style="min-height:90px"></textarea></div></div>
+   <div class="row" style="margin-top:10px"><button id="bi">Read brand book</button><button id="bs" class="sec">Load a sample brand book</button></div><div id="bmsg" class="muted"></div></div>
+  <div class="row"><h2 style="margin:0">Waiting for your decision (${p.items.length})</h2><span class="sp"></span>${p.items.length ? `<button id="aa" class="sec">Approve all</button>` : ""}</div>
+  ${p.items.map(row).join("") || `<div class="card muted">No proposals waiting. Import a brand book above.</div>`}`;
+  const run = wrap(async () => { const b = $("#bi"); if (b.disabled) return; const f = $("#bf").files[0], t = $("#bt").value;
+    if (!f && !t.trim()) return toast("Choose a file or paste some text first");
+    b.disabled = true; b.textContent = "Reading..."; try { const fd = new FormData(); if (f) fd.append("file", f); fd.append("text", t);
+      const r = await api("/brandbook/import", { body: fd }); toast(`${r.count} proposals created (${r.mode === "ai" ? "AI-assisted" : "rule-based"})`); await importView(); } finally { b.disabled = false; b.textContent = "Read brand book"; } });
+  $("#bi").onclick = run;
+  $("#bs").onclick = wrap(async () => { const s = await api("/brandbook/sample"); $("#bt").value = s.text; });
+  const aa = $("#aa"); if (aa) aa.onclick = wrap(async () => { if (!confirm("Approve every proposal as shown? Items that are incomplete stay in the list.")) return; aa.disabled = true; const r = await api("/proposals/approve-all", { method: "POST" }); toast(`${r.approved} approved` + (r.needs_edit ? `, ${r.needs_edit} need editing` : "")); await importView(); });
+  main.querySelectorAll("[data-pid]").forEach(c => { const id = c.dataset.pid, it = p.items.find(x => String(x.id) === id);
+    const read = () => { const d = { ...it.data }; c.querySelectorAll("[data-k]").forEach(i => { let v = i.value; if (i.dataset.k === "keywords") v = v.split(",").map(x => x.trim()).filter(Boolean); else if (i.dataset.k === "value") v = v === "" ? null : Number(v); else if (i.dataset.k === "expires") v = v || null; d[i.dataset.k] = v; }); return d; };
+    c.querySelector(".pa").onclick = wrap(async () => { const b = c.querySelector(".pa"); if (b.disabled) return; b.disabled = true; try { await api("/proposals/" + id, { method: "PUT", json: { data: read() } }); await api(`/proposals/${id}/approve`, { method: "POST" }); toast("Approved and now active"); await importView(); } catch (e) { b.disabled = false; throw e; } });
+    c.querySelector(".pr").onclick = wrap(async () => { await api(`/proposals/${id}/reject`, { method: "POST" }); await importView(); }); });
 }
 
 // ---------------------------------------------------------------- brand rules (admin)

@@ -62,20 +62,24 @@ def http_detail(e):
     return f"HTTP {e.code}: {msg[:160]}".strip()
 
 
-def call_model(system, user):
+def call_model(system, user, image=None, json_mode=True):
+    """image: optional (bytes, mime). json_mode False returns plain text."""
     global _working_model
     p = provider()
     if p == "gemini":
-        body = {"systemInstruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": [{"text": user}]}],
-                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}}
+        import base64
+        parts = [{"text": user}]
+        if image: parts.append({"inline_data": {"mime_type": image[1], "data": base64.b64encode(image[0]).decode()}})
+        gc = {"temperature": 0.1}
+        if json_mode: gc["responseMimeType"] = "application/json"
+        body = {"systemInstruction": {"parts": [{"text": system}]}, "contents": [{"role": "user", "parts": parts}], "generationConfig": gc}
         models = list(dict.fromkeys(([_working_model] if _working_model else []) + [GEMINI_MODEL] + GEMINI_FALLBACKS))[:4]
         last = None
         for m in models:
             for attempt in (1, 2):
                 try:
                     d = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
-                              {"x-goog-api-key": os.environ["GEMINI_API_KEY"]}, body, timeout=15)
+                              {"x-goog-api-key": os.environ["GEMINI_API_KEY"]}, body, timeout=30 if (image or not json_mode) else 15)
                     _working_model = m
                     return d["candidates"][0]["content"]["parts"][0]["text"]
                 except urllib.error.HTTPError as e:
@@ -88,9 +92,12 @@ def call_model(system, user):
                     last = e; break
         raise last
     if p == "anthropic":
+        import base64
+        content = [{"type": "text", "text": user}]
+        if image: content.insert(0, {"type": "image", "source": {"type": "base64", "media_type": image[1], "data": base64.b64encode(image[0]).decode()}})
         d = _post("https://api.anthropic.com/v1/messages",
                   {"x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01"},
-                  {"model": ANTHROPIC_MODEL, "max_tokens": 1500, "system": system, "messages": [{"role": "user", "content": user}]})
+                  {"model": ANTHROPIC_MODEL, "max_tokens": 3000, "system": system, "messages": [{"role": "user", "content": content}]}, timeout=40)
         return d["content"][0]["text"]
     raise RuntimeError("no provider")
 
@@ -165,3 +172,54 @@ def ai_findings(text, guidelines, facts, conf_terms):
     uniq = sorted({err.split(": ", 1)[1] for err in errors})
     status = "ok" if not errors else (("partial: " if results else "error: ") + "; ".join(uniq))
     return results, status
+
+
+# ---------------------------------------------------------------- Round 3 helpers
+def _json_obj(raw):
+    raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.M).strip()
+    return json.loads(raw)
+
+
+def read_image_text(data, mime):
+    """Vision model reads the visible text in an image. Returns (text, status). status: ok | off | error: ..."""
+    if not provider(): return "", "off"
+    try:
+        out = call_model("You read text in images. Return ONLY the exact visible text of the image, in reading order, one line per text block. "
+                         "If there is no text, return exactly NO_TEXT. Do not describe the image.",
+                         "Transcribe the visible text.", image=(data, mime or "image/png"), json_mode=False)
+        out = out.strip()
+        return ("" if out == "NO_TEXT" else out[:2000]), "ok"
+    except Exception as e:
+        return "", f"error: {type(e).__name__}"
+
+
+def draft_wording(old_text, change_description):
+    """AI drafts clearer guideline wording. Returns (text, status); never applied automatically."""
+    if not provider(): return "", "off"
+    try:
+        out = call_model("You improve brand guidelines. Rewrite the guideline so it is unambiguous: keep its intent, add concrete allowed and not-allowed examples, "
+                         "keep it under 70 words, plain English. Return ONLY the rewritten guideline text.",
+                         f"CURRENT GUIDELINE:\n{old_text}\n\nWHAT REVIEWERS KEEP DISAGREEING ABOUT:\n{change_description}", json_mode=False)
+        return out.strip().strip('"')[:600], "ok"
+    except Exception as e:
+        return "", f"error: {type(e).__name__}"
+
+
+BRANDBOOK_KEYS = ("tone", "terms", "hype", "facts")
+
+
+def propose_from_brandbook(text):
+    """Asks the model for structured proposals. Returns (dict, status). Output is validated by brandbook.validate_ai."""
+    if not provider(): return None, "off"
+    masked = text[:12000]
+    system = ("You turn a brand book into structured, checkable rules. Return ONLY JSON: "
+              '{"guidelines":[{"title":str,"text":str,"excerpt":str}],'
+              '"preferred_terms":[{"bad":str,"good":str,"excerpt":str}],'
+              '"pressure_phrases":[{"phrase":str,"alternative":str,"excerpt":str}],'
+              '"facts":[{"topic":str,"statement":str,"keywords":[str],"value":number|null,"unit":"day|hour|month|year|pct|inr|",'
+              '"source":str,"expires":"YYYY-MM-DD"|null,"excerpt":str}]}. '
+              "EVERY item must include an excerpt copied EXACTLY (verbatim) from the brand book that supports it. Never invent rules or facts that are not written in the text.")
+    try:
+        return _json_obj(call_model(system, "BRAND BOOK:\n" + masked)), "ok"
+    except Exception as e:
+        return None, f"error: {type(e).__name__}"
